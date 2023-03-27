@@ -1,0 +1,924 @@
+#+TITLE: Cast_cluster
+#+AUTHOR: Phil Dyer
+#+DATE: 2023-03-02
+* Audience
+:PROPERTIES:
+:ID:       org:930e7d6c-d311-46fb-98ce-76ed497543cf
+:END:
+This document is for my supervisors and myself, to show how using variance along with mean is a useful way to cluster for bioregions, that CASTer is a useful way to find the clusters, and that CASTer works as expected.
+
+* Introduction
+:PROPERTIES:
+:ID:       org:dd760baf-c451-49a7-a93d-7464be51aeca
+:END:
+* Part 1: Foundational concepts for clustering bioregions
+:PROPERTIES:
+:ID:       org:2e89902d-d632-499d-afd9-e9603a59eb51
+:END:
+** Current clustering approaches
+:PROPERTIES:
+:ID:       org:bb63af28-a70f-40ee-a72d-b39b10ab4317
+:END:
+*** Different clustering goals
+:PROPERTIES:
+:ID:       org:521ec581-f302-4c14-8c01-460127b9e63c
+:END:
+**** In a well defined space with useful distance metrics
+:PROPERTIES:
+:ID:       org:4821158f-8f19-4b7b-867c-9840987c47e1
+:END:
+**** In a network, where only pairwise distances are known
+:PROPERTIES:
+:ID:       org:cf26c80c-01ad-4832-9ad6-d2779b1a6ed8
+:END:
+*** Clustering parameters that usually need tuning
+:PROPERTIES:
+:ID:       org:ead783dc-5e7c-4f43-96c4-aaf42d7981da
+:END:
+**** K
+:PROPERTIES:
+:ID:       org:9a460eb1-8b45-4f4c-a9d0-768e5c1ac830
+:END:
+**** H or Similarity Threshold
+:PROPERTIES:
+:ID:       org:f06e528e-6912-4ff3-8038-aa08868842c5
+:END:
+** Why these approaches did not work for bioregions
+:PROPERTIES:
+:ID:       org:6fa066a5-2a25-474f-875b-9dba81c14eef
+:END:
+** Properties of a clustering approach needed for bioregions
+:PROPERTIES:
+:ID:       org:c7bda003-c683-490e-a47e-ee561b092a6f
+:END:
+*** Compact
+:PROPERTIES:
+:ID:       org:6d1f5e62-9ab2-4b0b-9a3d-e8aad438bd98
+:END:
+Given we are clustering environmental gradients, we want sites within a bioregion to all cluster around a median. The bioregion may "snake" spatially, but environmentally we do not want sites to "snake" through a range of temperatures, salinities, nitrate levels, etc. See top two rows of https://scikit-learn.org/stable/auto_examples/cluster/plot_cluster_comparison.html to see what bioregions should NOT look like.
+
+
+*** Dynamic K
+:PROPERTIES:
+:ID:       org:4f48321e-b430-4e84-9aa1-2c08100a5677
+:END:
+Bioregions are, fundamentally, an abstraction, so the true number of bioregions depends on the problem and scale. K must be dynamic, because we have no a priori way of deciding how many bioregions should exist. Metrics that select a good K after fitting over a range of K's is acceptable. I struggled with existing metrics and K-means, because the shape of the environmental gradient is less isolated clusters, and more like a crumpled sheet of paper.
+
+
+*** Reasonable setting for H in an arbitrary space
+:PROPERTIES:
+:ID:       org:9e86caa4-6bfe-4143-b5a6-844dce6b3d02
+:END:
+An alternative to fixing K is to fix the window that defines "similar". Once we can define similar, we can decide whether any set of sites make a good cluster. Gradient Forest makes this hard, because we don't know what R^2 really means biologically, so we don't have a way of declaring that differences of, say, R^2 < 0.01 are similar.
+** Including variance in the distance metric (Mahalanobis distances)
+:PROPERTIES:
+:ID:       org:be0f08fc-ddf5-466b-8539-ad6beb8d64a1
+:END:
+Aside: Mahalanobis distance came up when studying Gaussian Mixtures.
+*** Benefit
+:PROPERTIES:
+:ID:       org:0a0b3c3a-e307-49e8-af0c-e9c8d0118fa1
+:END:
+Overcomes the issue of setting H in an arbitrary space. "Similar" does not need to be known a priori, it is defined by the Mahalanobis distance: if the distance between the means of two points is small relative to the variance of the points, then the points are similar.
+
+Inspired by hypothesis testing: how likely is it that two populations significantly different? P-values use variance around the means to give a numeric answer.
+*** Limitations
+:PROPERTIES:
+:ID:       org:4088d1d5-ceb4-47ee-a3e9-0caa4fd6d9b4
+:END:
+**** Needs more data
+:PROPERTIES:
+:ID:       org:601d9cab-eb90-4f2b-a5f0-4528416c6734
+:END:
+Most datasets don't have variance around means, just means.
+**** Pairwise
+:PROPERTIES:
+:ID:       org:f10c5c55-b3bd-4d52-ae41-f1db1122d588
+:END:
+Mahalanobis distance, p-values, are only relevant on a pairwise basis. They do not form a proper space. Clustering techniques that rely on spatial arrangements, such as K-means, cannot be used.
+** Clustering methods that can make use of pairwise distance
+:PROPERTIES:
+:ID:       org:43fa4c61-f485-40bb-930f-b47ed4cc1e1f
+:END:
+Heirarchical clustering (agglomerative and divisive), Graph based techniques like spectral decomposition and affinity propagation, maybe DBSCAN, CAST (which sort of behaves like k-means, but only needs to consider pairwise distances, and tolerates dynamic K.)
+*** Heirarchical clustering doesn't fix K, but needs a similarity threshold.
+:PROPERTIES:
+:ID:       org:73df94fb-7712-42b0-84ea-2a2b9e4f0019
+:END:
+WGCNA is used in genetics to find clusters, and allows different parts of the tree to be cut to different heights, but has it's own parameters. Informal communication was "we just tweak it until it looks good".
+
+Heirarchical clustering comes closest to what I needed for bioregionalisation. CAST approximates an agglomeratvie heirarchical clustering, but is faster and uses less memory. Also, agglomerative heirarchical clustering is "greedy": once a join has been made, it never gets undone.
+
+Affinity propagation is another technique that could work, and it's algorithm has a number of similaritise to CAST. Both iteratively update the state of each node at each step, and assign nodes to centers. Affiinty propagration is to CAST as K-medoids is to K-means: The cluster centers in Affinity propagation are decided by taking the point nearest the center of the cluster, while CAST sets the center to be the mean of the cluster. Like heirarchical clustering, it can be slow.
+
+*** Graph based techniques tend to find "snakes"
+:PROPERTIES:
+:ID:       org:8a221eb5-355e-421f-ad49-e379a5208ce4
+:END:
+An alternative concept in network graph theory is cliques, where a clique is made up of a set of vertices that are all connected to eachother. Cliques tend to be too narrowly defined, and will leave a lot of points that do not belong to cliques, so while cliques are a starting point, they will not cluster bioregions.
+* Part 2: Why CAST and Hubert's Gamma statistic works for bioregions
+:PROPERTIES:
+:ID:       org:b263202a-6b9b-4430-8fe4-7ab23fc4240d
+:END:
+*** CAST
+:PROPERTIES:
+:ID:       org:eebbcd9f-d437-4a77-b2cf-07ce57e7f1f5
+:END:
+
+Functions more like K-means, in that it finds groups of highly interconnected points rather than snakes. Approximates cliques, but doesn't guarantee all cliques are found, and only allows a point to belong to one group. Unlike K-means, does not need a true space to work with.
+
+Best described as a fast, low memory approximation for a heirarchical clustering technique.
+**** CAST finds compact groups
+:PROPERTIES:
+:ID:       org:1e705417-aa67-4565-a86f-fa3b32033b9c
+:END:
+**** CAST can dynamically set K
+:PROPERTIES:
+:ID:       org:c08a5e29-ed11-4d2c-adda-8992b0eb9c66
+:END:
+Depends on similarity threshold
+**** Useful statistic for finding appropriate similarity threshold
+:PROPERTIES:
+:ID:       org:8f30efd2-ca6c-4435-b3d0-f9168cf2fe5f
+:END:
+Hubert's Gamma statistic. Similarity threshold ranges from 0 to 1, and mathematically, Hubert's Gamma Statistic (at least the Thompson et al. variant) will be 0 at either extreme, corresponding to every point in it's own cluster, or all points in one cluster.
+*** Heriarchical clustering
+:PROPERTIES:
+:ID:       org:8fb0700d-c0b3-47d5-857d-d79341972301
+:END:
+Important to mention that heirarchical clustering would work conceptually. With the appropriate linkage method, propably average or max linkage, and using Huberts Gamma statistic to find the right height cut, results would be similar. WGCNA is a special case of heirarchical clustering that might help.
+* Part 3: Examples of CAST clustering using the CASTer R package
+:PROPERTIES:
+:ID:       org:cdad2c3b-6f63-4618-a5d1-8011c5190a60
+:END:
+** Setting up R
+:PROPERTIES:
+:ID:       org:4aae6ec0-c9d4-49d2-9a55-9eac479eea7b
+:END:
+We need the CastCluster package and plotting libraries.
+
+We also want the MASS package to generate distributsions, although we only actually use the generated points for plotting. I want to avoid specifying a multivariate normal distribution, generating points, then recalculating the specified mean and variance form the genreated points.
+#+begin_src R
+library(castcluster)
+library(ggplot2)
+library(ggforce)
+library(cowplot)
+library(gridGraphics)
+
+library(bench)
+library(apcluster)
+
+library(purrr)
+
+library(MASS)
+library(Matrix)
+#+end_src
+
+
+#+begin_src R
+source("./bhattacharyya_dist.R")
+source("./make_sim_mat.R")
+#+end_src
+
+** Clustering equally spaced points on a line
+:PROPERTIES:
+:ID:       org:abaa3928-fbd9-4221-9931-fa01fe841b35
+:END:
+Points on a line, about 10, all evenly spaced 1 unit apart. Variance is added and adjusted, and clustering is shown in each case.
+- Very small standard deviation <0.5
+  - expect all unique clusters or breakage of algorithm
+- Some overlap, standard deviation ~2
+  - Expect about 4 clusters, edges having less points
+- Huge standard deviation, ~8
+  - expect 2 clusters
+- tall thin standard deviation, 0.5 along line, 8 vertically
+  - Same as very small standard deviation
+- short wide standard deviation, 8 horizontally, 0.5 along line.
+  - same as huge standard deviation
+
+~ggforce~ has ~geom_ellipse()~ which lets us draw ellipses
+
+*** Setup
+We will keep the means constant for these plots, and adjust the variance. The next few plots show the data.
+
+
+#+NAME: equal_points_points
+#+begin_src R :exports both :results graphics file :file ./generated/equal_points_points.png
+equal_points <- data.frame(x = seq.int(0, 9), y = 0)
+ggplot(equal_points, aes(x=x, y=y)) + geom_point()+
+  coord_fixed()
+
+#+end_src
+#+CAPTION: Means evenly spaced on a line. No clustering is obvious.
+#+LABEL: fig:equal_points_points
+
+#+NAME: equal_points_sd_cloud
+#+begin_src R :exports both :results graphics file :file ./generated/equal_points_sd_cloud.png
+eq_points_sd <- data.frame(x_sd = 0.1, y_sd = 0.1)
+point_cloud <- lapply(seq_along(equal_points$x),
+                      function(i, eq_points_sd, equal_points){
+                        out <- data.frame(
+                            mvrnorm(1000, as_vector(equal_points[i,]), diag(as_vector(eq_points_sd)^2))
+                        )
+                        return(out)
+                        }, eq_points_sd = eq_points_sd, equal_points = equal_points)
+point_cloud <- do.call(rbind, point_cloud)
+
+ggplot(data = rbind(equal_points, point_cloud), aes(x=x,y=y)) + geom_point(alpha = 0.1)+
+  coord_fixed()
+
+#+end_src
+#+CAPTION: Means evenly spaced on a line from figure [[ref:fig:equal_points_points]], now with variance shown by point clouds.
+#+LABEL: fig:equal_points_sd
+
+Showing the variance of each point using ellipses is cleaner. We are plotting ellipses at 1 standard deviation. Later, the similarity between points will be given by the overlap of the distributions, and the degree of overlap will give a good sense of similarity. Future plots will drop the point cloud.
+
+#+NAME: equal_points_sd_ellipse
+#+begin_src R :exports both :results graphics file :file ./generated/equal_points_sd_ellipse.png
+
+ggplot(cbind(equal_points, eq_points_sd), aes(x=x,y=y, x0=x, y0=y, a=x_sd, b=y_sd, angle = 0)) +
+  geom_point() +
+  geom_ellipse() +
+  geom_point(data = point_cloud, mapping = aes(x=x, y=y),alpha = 0.05, inherit.aes = FALSE)+
+  coord_fixed()
+
+#+end_src
+#+CAPTION: Means evenly spaced on a line from figure [[ref:fig:equal_points_sd_cloud]], now with variance shown by ellipses indicating 1 standard deviation.
+#+LABEL: fig:equal_points_sd_ellipse
+*** Very small variance
+:PROPERTIES:
+:ID:       org:ce1952dd-b821-4d65-8344-52707274bd75
+:END:
+Using the figure ref:fig:equal_points_sd_ellipse we will cluster it with CASTer.
+
+~cast_optimal~ will do a search across ~affinity_threshold~ and return the clustering that maximises Hubert's Gamma statistic.
+
+In this trivial example, we know that each point should be it's own cluster.
+#+name: eq_p_small_sim_mat
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_small_sim_mat.png
+point_sigma <- list()
+point_sigma$sigma <- lapply(seq_along(equal_points[,1]),
+                    function(i, eq_points_sd) {
+                        return(diag(as_vector(eq_points_sd )))
+                    }, eq_points_sd=eq_points_sd)
+point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                    function(sig) {
+                            return(determinant(sig, logarithm=FALSE)$modulus)
+                                    })
+sim_mat <- make_sim_mat(equal_points, point_sigma)
+
+best_clust <- castcluster::cast_optimal(sim_mat, return_full = FALSE)
+p1 <-castcluster::gg_sim_mat(sim_mat, cast_ob = best_clust$cast_ob[[1]], aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE, highlight = TRUE)
+p2 <-castcluster::gg_sim_mat(sim_mat, cast_ob = NULL, aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE)
+
+plot_grid(p1, p2,  labels = c("A", "B"))
+
+#+end_src
+#+CAPTION: Similarity matrix of evenly spaced points with small variance.
+#+LABEL: fig:equal_points_small_sim
+
+Figure ref:fig:equal_points_small_sim A) shows the clustered similarity matrix. In this trivial case, all points are in a cluster by themselves. Due to randomness in selecting cluster seeds, the elements have been reordered, so I have also plotted ref:fig:equal_points_small_sim B), which shows that adjacent elements do have a small level of similarity like we expect.
+
+#+NAME: eq_p_small_clust
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_small_clust.png
+clust_ind <- castcluster::cast_obj_to_df(best_clust$cast_ob[[1]])
+
+plot_data <- cbind(clust_ind, equal_points, eq_points_sd)
+ggplot(plot_data, aes(x=x,y=y, x0=x, y0=y, a=x_sd, b=y_sd, angle = 0, colour = as.factor(clust))) +
+  geom_point() +
+  geom_ellipse() +
+  scale_colour_manual(values = rainbow(max(clust_ind$clust)))+
+  coord_fixed()
+
+#+end_src
+#+CAPTION: Clustered points on a line with small variance. Each point forms a single cluster.
+#+LABEL: fig:equal_points_small_clust
+
+Figure ref:fig:equal_points_small_clust shows the points coloured by cluster. As expected, each point is in a separate cluster.
+*** Large variance
+:PROPERTIES:
+:ID:       org:b48d155a-d1fc-475b-91fa-0384e4705586
+:END:
+Here we increase the variance until adjacent points are within 1 standard deviation of eachother.
+#+begin_src R :exports both :results graphics file :file ./generated/eq_p_large.png
+eq_points_sd <- data.frame(x_sd = 1.1, y_sd = 1.1)
+ggplot(cbind(equal_points, eq_points_sd), aes(x=x,y=y, x0=x, y0=y, a=x_sd, b=y_sd, angle = 0)) +
+  geom_point() +
+  geom_ellipse()+
+  coord_fixed()
+
+#+end_src
+
+The 1 standard deviation ellipses are overlapping with points 2 units away, so we have strong similarity across the points.
+
+#+name: eq_p_large_sim_mat
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_large_sim_mat.png
+point_sigma <- list()
+point_sigma$sigma <- lapply(seq_along(equal_points[,1]),
+                    function(i, eq_points_sd) {
+                        return(diag(as_vector(eq_points_sd )))
+                    }, eq_points_sd=eq_points_sd)
+point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                    function(sig) {
+                            return(determinant(sig, logarithm=FALSE)$modulus)
+                                    })
+sim_mat <- make_sim_mat(equal_points, point_sigma)
+
+best_clust <- castcluster::cast_optimal(sim_mat, return_full = FALSE)
+p1 <-castcluster::gg_sim_mat(sim_mat, cast_ob = best_clust$cast_ob[[1]], aff_thres = best_clust$aff_thres[1], sort_among_clust = TRUE, sort_within_clust = TRUE, highlight = TRUE)
+
+
+p2 <-castcluster::gg_sim_mat(sim_mat, cast_ob = NULL, aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE)
+
+plot_grid(p1, p2,  labels = c("A", "B"))
+#+end_src
+#+CAPTION: Similarity matrix of evenly spaced points with largeium variance.
+#+LABEL: fig:equal_points_large_sim
+
+Figure ref:fig:equal_points_large_sim A) shows the clustered similarity matrix. Two clusters is considered optimal using the Hubert Gaama statistic. Figure ref:fig:equal_points_large_sim B) shows the unclustered similarity maptrix, which shows that similarity is strong for about 3 points either side of a given point. We don't see three clusters because the Hubert's Gamma statistic penalises putting highly similar points in separate clusters. Since our example shows a set of smoothly connected points, adding clusters creates breaks where two adjacent and highly similar points are put into separate clusters. Having 3 clusters means we would have two breaks in the continuous line of points, instead of just one here.
+
+#+NAME: eq_p_large_clust
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_large.png
+clust_ind <- castcluster::cast_obj_to_df(best_clust$cast_ob[[1]])
+
+plot_data <- cbind(clust_ind, equal_points, eq_points_sd)
+ggplot(plot_data, aes(x=x,y=y, x0=x, y0=y, a=x_sd, b=y_sd, angle = 0, colour = as.factor(clust))) +
+  geom_point() +
+  geom_ellipse() +
+  scale_colour_manual(values = rainbow(max(clust_ind$clust)))+
+  coord_fixed()
+
+#+end_src
+#+CAPTION: Clustered points on a line with largeium variance. Each point forms a single cluster.
+#+LABEL: fig:equal_points_large
+
+*** Moderate variance
+:PROPERTIES:
+:ID:       org:53355d1c-47cf-416c-ac42-89e078013669
+:END:
+Here we set the variance so the 1 standard deviation elliptses start to overlap, but not substantially.
+#+begin_src R :exports both :results graphics file :file ./generated/eq_p_med.png
+eq_points_sd <- data.frame(x_sd = 0.55, y_sd = 0.55)
+ggplot(cbind(equal_points, eq_points_sd), aes(x=x,y=y, x0=x, y0=y, a=x_sd, b=y_sd, angle = 0)) +
+  geom_point() +
+  geom_ellipse()+
+  coord_fixed()
+
+#+end_src
+
+#+name: eq_p_med_sim_mat
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_med_sim_mat.png
+point_sigma <- list()
+point_sigma$sigma <- lapply(seq_along(equal_points[,1]),
+                    function(i, eq_points_sd) {
+                        return(diag(as_vector(eq_points_sd )))
+                    }, eq_points_sd=eq_points_sd)
+point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                    function(sig) {
+                            return(determinant(sig, logarithm=FALSE)$modulus)
+                                    })
+sim_mat <- make_sim_mat(equal_points, point_sigma)
+
+best_clust <- castcluster::cast_optimal(sim_mat, return_full = FALSE)
+p1 <-castcluster::gg_sim_mat(sim_mat, cast_ob = best_clust$cast_ob[[1]], aff_thres = best_clust$aff_thres[1], sort_among_clust = TRUE, sort_within_clust = TRUE, highlight = TRUE)
+
+
+p2 <-castcluster::gg_sim_mat(sim_mat, cast_ob = NULL, aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE)
+
+plot_grid(p1, p2,  labels = c("A", "B"))
+#+end_src
+#+CAPTION: Similarity matrix of evenly spaced points with medium variance.
+#+LABEL: fig:equal_points_med_sim
+
+Figure ref:fig:equal_points_med_sim A) shows the clustered similarity matrix with three clusters. Figure ref:fig:equal_points_med_sim B) shows the unclustered similarity matrix for reference. Three clusters balances out the points optimally. Due to randomness in the seeding of CAST, the cluster that gets 4 points can change. The siimilarity drops to nearly 0 within 3 points, so the edges are not affecting where the breaks are placed.
+
+
+#+name: eq_p_med_sim_mat
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_med_sim_mat.png
+eq_points_sd <- data.frame(x_sd = 0.75, y_sd = 0.75)
+point_sigma <- list()
+point_sigma$sigma <- lapply(seq_along(equal_points[,1]),
+                    function(i, eq_points_sd) {
+                        return(diag(as_vector(eq_points_sd )))
+                    }, eq_points_sd=eq_points_sd)
+point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                    function(sig) {
+                            return(determinant(sig, logarithm=FALSE)$modulus)
+                                    })
+sim_mat <- make_sim_mat(equal_points, point_sigma)
+
+best_clust <- castcluster::cast_optimal(sim_mat, return_full = FALSE)
+p1 <-castcluster::gg_sim_mat(sim_mat, cast_ob = best_clust$cast_ob[[1]], aff_thres = best_clust$aff_thres[1], sort_among_clust = TRUE, sort_within_clust = TRUE, highlight = TRUE)
+
+
+p2 <-castcluster::gg_sim_mat(sim_mat, cast_ob = NULL, aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE)
+
+plot_grid(p1, p2,  labels = c("A", "B"))
+#+end_src
+#+CAPTION: Similarity matrix of evenly spaced points with medium variance.
+#+LABEL: fig:equal_points_med_sim
+
+When the variance is increased to the point where the edge effect matters (similarity is moderate around 4 points away), the middle group always gets the extra point because of edge effects.
+
+#+NAME: eq_p_med_clust
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_med.png
+clust_ind <- castcluster::cast_obj_to_df(best_clust$cast_ob[[1]])
+
+plot_data <- cbind(clust_ind, equal_points, eq_points_sd)
+ggplot(plot_data, aes(x=x,y=y, x0=x, y0=y, a=x_sd, b=y_sd, angle = 0, colour = as.factor(clust))) +
+  geom_point() +
+  geom_ellipse() +
+  coord_fixed() +
+  scale_colour_manual(values = rainbow(max(clust_ind$clust)))
+#+end_src
+#+CAPTION: Clustered points on a line with medium variance. Each point forms a single cluster.
+#+LABEL: fig:equal_points_med
+*** Demonstrating sensitivity to direction of variance
+:PROPERTIES:
+:ID:       org:ee9660e8-cfd7-4e5b-ad92-f02cb89b5205
+:END:
+To show that similarity is decided by the degree of overlap of the distributions, we test variances where the x and y variance differ. Along the x axis we will use the "moderate" variance, expecting 3 groups, but he y axis will have both very large and very small variances without any effect.
+#+begin_src R :exports both :results graphics file :file ./generated/eq_p_large.png
+eq_points_sd <- data.frame(x_sd = 0.75, y_sd = 5)
+ggplot(cbind(equal_points, eq_points_sd), aes(x=x,y=y, x0=x, y0=y, a=x_sd, b=y_sd, angle = 0)) +
+  geom_point() +
+  geom_ellipse() +
+  coord_fixed()
+#+end_src
+
+
+#+name: eq_p_large_sim_mat
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_large_sim_mat.png
+point_sigma <- list()
+point_sigma$sigma <- lapply(seq_along(equal_points[,1]),
+                    function(i, eq_points_sd) {
+                        return(diag(as_vector(eq_points_sd )))
+                    }, eq_points_sd=eq_points_sd)
+point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                    function(sig) {
+                            return(determinant(sig, logarithm=FALSE)$modulus)
+                                    })
+sim_mat <- make_sim_mat(equal_points, point_sigma)
+
+best_clust <- castcluster::cast_optimal(sim_mat, return_full = FALSE)
+p1 <-castcluster::gg_sim_mat(sim_mat, cast_ob = best_clust$cast_ob[[1]], aff_thres = best_clust$aff_thres[1], sort_among_clust = TRUE, sort_within_clust = TRUE, highlight = TRUE)
+
+
+p2 <-castcluster::gg_sim_mat(sim_mat, cast_ob = NULL, aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE)
+
+plot_grid(p1, p2,  labels = c("A", "B"))
+#+end_src
+#+CAPTION: Similarity matrix of evenly spaced points with largeium variance.
+#+LABEL: fig:equal_points_large_sim
+
+As expected, we have 3 clusters again, even with a much larger y variance.
+
+#+begin_src R :exports both :results graphics file :file ./generated/eq_p_large.png
+eq_points_sd <- data.frame(x_sd = 0.75, y_sd = 0.05)
+## ggplot(cbind(equal_points, eq_points_sd), aes(x=x,y=y, x0=x, y0=y, a=x_sd, b=y_sd, angle = 0)) +
+##   geom_point() +
+##   geom_ellipse() +
+##   coord_fixed()
+#+end_src
+
+
+#+name: eq_p_large_sim_mat
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_large_sim_mat.png
+point_sigma <- list()
+point_sigma$sigma <- lapply(seq_along(equal_points[,1]),
+                    function(i, eq_points_sd) {
+                        return(diag(as_vector(eq_points_sd )))
+                    }, eq_points_sd=eq_points_sd)
+point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                    function(sig) {
+                            return(determinant(sig, logarithm=FALSE)$modulus)
+                                    })
+sim_mat <- make_sim_mat(equal_points, point_sigma)
+
+best_clust <- castcluster::cast_optimal(sim_mat, return_full = FALSE)
+p1 <-castcluster::gg_sim_mat(sim_mat, cast_ob = best_clust$cast_ob[[1]], aff_thres = best_clust$aff_thres[1], sort_among_clust = TRUE, sort_within_clust = TRUE, highlight = TRUE)
+
+
+p2 <-castcluster::gg_sim_mat(sim_mat, cast_ob = NULL, aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE)
+
+plot_grid(p1, p2,  labels = c("A", "B"))
+#+end_src
+#+CAPTION: Similarity matrix of evenly spaced points with largeium variance.
+#+LABEL: fig:equal_points_large_sim
+
+The algorithm is not completly insensitive to the y axis, adding a very small y variance does slightly reduce edge effects and allow edge clusters to claim the extra point, but not to the point that every point becomes a unique cluster. Intuitively, reducing the y variance increases the proportion of the distributions in the x direction, so the similarities increase. The effects of dimesionality apply here, more dimensions increases sparsity, and makes it harder for distributions to overlap.
+
+#+NAME: eq_p_large_clust
+#+begin_src R  :exports both :results graphics file :file ./generated/eq_p_large.png
+clust_ind <- castcluster::cast_obj_to_df(best_clust$cast_ob[[1]])
+
+plot_data <- cbind(clust_ind, equal_points, eq_points_sd)
+ggplot(plot_data, aes(x=x,y=y, x0=x, y0=y, a=x_sd, b=y_sd, angle = 0, colour = as.factor(clust))) +
+  geom_point() +
+  geom_ellipse() +
+  scale_colour_manual(values = rainbow(max(clust_ind$clust)))
+#+end_src
+#+CAPTION: Clustered points on a line with largeium variance. Each point forms a single cluster.
+#+LABEL: fig:equal_points_large
+
+** Approaching third
+:PROPERTIES:
+:ID:       org:136dc741-b8f5-4f81-9d68-81a89622d77c
+:END:
+Three points, two fixed at a distance that gives similarity of 0.5, one is moved closer with each experiment, and we see when the middle point changes cluster
+
+#+NAME: approach_setup
+#+begin_src R  :exports both :results graphics file :file-ext png
+n_experiments <- 10
+experiment <- rep(seq.int(1,n_experiments), each = 3)
+y <- as.vector(vapply(seq.int(1,n_experiments), function(x) {
+  return(c(-0.35,0,2/x-0.5))
+  #return(c(-0.35,0,10-x))
+  }, numeric(3)))
+approach <- data.frame(
+  experiment = experiment,
+  y = y,
+  sd = 0.4)
+
+ggplot(approach, aes(x= experiment, y = y, x0 = experiment, y0 = y, a = sd, b = sd, angle = 0)) +
+  geom_point()  +
+  geom_ellipse()
+#+end_src
+
+Each set of three points along the x axis is a separate experiment, we are only clustering vertically, to show when the third point joins the other points in a cluster.
+
+#+begin_src R  :exports both :results graphics file :file-ext png
+
+exp_results <- lapply(seq.int(1,n_experiments), function(x, approach){
+        points <- approach[approach$experiment == x, ]
+
+        point_sigma <- list()
+        point_sigma$sigma <- lapply(seq_along(points[,1]),
+                            function(i, points) {
+                                return(diag(2)*points[i, "sd"] )
+                            }, points=points)
+        point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                            function(sig) {
+                                    return(determinant(sig, logarithm=FALSE)$modulus)
+                                            })
+        points$x <- points$experiment
+        print(x)
+        print(point_sigma)
+        sim_mat <- make_sim_mat(points[c("x","y")], point_sigma)
+
+
+        best_clust <- castcluster::cast_optimal(sim_mat, return_full = FALSE)
+        p1 <-castcluster::gg_sim_mat(sim_mat, cast_ob = best_clust$cast_ob[[1]], aff_thres = best_clust$aff_thres[1], sort_among_clust = TRUE, sort_within_clust = TRUE, highlight = TRUE)
+
+
+        p2 <-castcluster::gg_sim_mat(sim_mat, cast_ob = NULL, aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE)
+        finished_experiment <- list(sim_mat = sim_mat, best_clust=best_clust, p1=p1, p2=p2)
+        #plot_grid(p1, p2,  labels = c("A", "B"))
+        plot_data <- data.frame(x = x, y = points$y, sd = points$sd, clust_ind = castcluster::cast_obj_to_df(best_clust$cast_ob[[1]]))
+
+        return(list(finished_experiment = finished_experiment, plot_data = plot_data))
+    }, approach = approach)
+
+combined_plot_data <- do.call(rbind, lapply(exp_results, function(x){x$plot_data}))
+
+ggplot(combined_plot_data, aes(x=as.factor(x),y=y, x0=x, y0=y, a=sd, b=sd, angle = 0, colour = as.factor(clust_ind.clust))) +
+  geom_point() +
+  geom_ellipse() +
+  scale_colour_manual(values = rainbow(max(clust_ind$clust)))
+#+end_src
+#+CAPTION:
+#+LABEL: fig:approach_results
+
+Figure ref:fig:approach_results shows the clustering of three points as the upper point is moved closer to the lower point. Each value of x is an indepent clustering, placed side by side for viewing. For runs 1 and 2, the two lower points are clustered together, and the upper point is placed in a separate cluster. Runs 3 to 6 show the upper point coming closer to the middle point than the lower point, causing the upper point to form a cluster with the middle point and the lower point to be placed in a sepaaaset cluster. Runs 7 to 10 show the "upper" point has moved past the middle point, and is clustered with the lowre point.
+
+
+
+#+NAME: approach_setup_dist
+#+begin_src R  :exports both :results graphics file :file-ext png
+n_experiments <- 10
+experiment <- rep(seq.int(1,n_experiments), each = 4)
+y <- as.vector(vapply(seq.int(1,n_experiments), function(x) {
+  return(c(-2, -0.35,0,2/x-0.5))
+  #return(c(-0.35,0,10-x))
+  }, numeric(4)))
+approach <- data.frame(
+  experiment = experiment,
+  y = y,
+  sd = 0.4)
+
+ggplot(approach, aes(x= experiment, y = y, x0 = experiment, y0 = y, a = sd, b = sd, angle = 0)) +
+  geom_point()  +
+  geom_ellipse()
+#+end_src
+
+Each set of three points along the x axis is a separate experiment, we are only clustering vertically, to show when the third point joins the other points in a cluster.
+
+#+begin_src R  :exports both :results graphics file :file-ext png
+
+exp_results <- lapply(seq.int(1,n_experiments), function(x, approach){
+        points <- approach[approach$experiment == x, ]
+
+        point_sigma <- list()
+        point_sigma$sigma <- lapply(seq_along(points[,1]),
+                            function(i, points) {
+                                return(diag(2)*points[i, "sd"] )
+                            }, points=points)
+        point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                            function(sig) {
+                                    return(determinant(sig, logarithm=FALSE)$modulus)
+                                            })
+        points$x <- points$experiment
+        print(x)
+        print(point_sigma)
+        sim_mat <- make_sim_mat(points[c("x","y")], point_sigma)
+
+
+        best_clust <- castcluster::cast_optimal(sim_mat, return_full = FALSE)
+        p1 <-castcluster::gg_sim_mat(sim_mat, cast_ob = best_clust$cast_ob[[1]], aff_thres = best_clust$aff_thres[1], sort_among_clust = TRUE, sort_within_clust = TRUE, highlight = TRUE)
+
+
+        p2 <-castcluster::gg_sim_mat(sim_mat, cast_ob = NULL, aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE)
+        finished_experiment <- list(sim_mat = sim_mat, best_clust=best_clust, p1=p1, p2=p2)
+        #plot_grid(p1, p2,  labels = c("A", "B"))
+        plot_data <- data.frame(x = x, y = points$y, sd = points$sd, clust_ind = castcluster::cast_obj_to_df(best_clust$cast_ob[[1]]))
+
+        return(list(finished_experiment = finished_experiment, plot_data = plot_data))
+    }, approach = approach)
+
+combined_plot_data <- do.call(rbind, lapply(exp_results, function(x){x$plot_data}))
+
+ggplot(combined_plot_data, aes(x=as.factor(x),y=y, x0=x, y0=y, a=sd, b=sd, angle = 0, colour = as.factor(clust_ind.clust))) +
+  geom_point() +
+  geom_ellipse() +
+  scale_colour_manual(values = rainbow(max(clust_ind$clust)))
+#+end_src
+#+CAPTION:
+#+LABEL: fig:approach_results_dist
+
+Figure ref:fig:approach_results_dist shows that CAST is sensitive to certain features of the  overall structure of the data. The top three points follow the same trajectory as in figure ref:fig:approach_resuls, but now we have added a fourth point far from any of the other points. The bottom point always forms a separate clsuter. Runs 2 to 10 all show the upper point forming a cluster with both the middle and lower point. Run 1 creates 3 clusters.
+
+This is most likely to be happening because I have not allowed CAST to return 1 cluster, but CAST and Hubert's Gamma Statistic will behave differently when more points are added. Distant points reduce the penalty for putting somewhat similar sites together. Overall I suspect this is a good thing, because it means k will not increase as fast as the nubmer of sites, and it highlights the fractal nature of bioregions: sites can be similar in the big picture, but have distinct differences when viewed up close.
+
+
+** Random points with random variance
+:PROPERTIES:
+:ID:       org:38e90cca-0bdf-4717-b786-53a4f758eaeb
+:END:
+Finally, I demonstrate a set of random points with random variances, to show that CAST works to give an intuitively correct clustering.
+
+I am going to pin a random seed, and try to figure out who said "Uniformally distributed data looks like clusters to the untrained eye"
+
+#+name: rand_clust
+#+begin_src R  :exports both :results graphics file :file-ext png
+n_points <- 100
+
+set.seed(9001)
+points <- data.frame(
+  x = runif(n_points, -1,1),
+  y = runif(n_points, -1,1),
+  sd_x = rbeta(n_points, 1.5, 3)/7, #beta distributions are always positive, but the parameters are not easy to interpret
+  sd_y = rbeta(n_points, 1.5, 3)/7
+  )
+
+ggplot(points, aes(x= x, y = y, x0 = x, y0 = y, a = sd_x, b = sd_y, angle = 0)) +
+  geom_point()  +
+  geom_ellipse()
+
+#+end_src
+
+
+#+begin_src R  :exports both :results graphics file :file-ext png
+
+        point_sigma <- list()
+        point_sigma$sigma <- lapply(seq_along(points[,1]),
+                            function(i, points) {
+                                return(diag(points[i, c("sd_x", "sd_y")] ))
+                            }, points=points)
+        point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                            function(sig) {
+                                    return(determinant(sig, logarithm=FALSE)$modulus)
+                                            })
+        sim_mat <- make_sim_mat(points[c("x","y")], point_sigma)
+
+
+        best_clust <- castcluster::cast_optimal(sim_mat, return_full = FALSE)
+        p1 <-castcluster::gg_sim_mat(sim_mat, cast_ob = best_clust$cast_ob[[1]], aff_thres = best_clust$aff_thres[1], sort_among_clust = TRUE, sort_within_clust = TRUE, highlight = TRUE)
+
+
+        p2 <-castcluster::gg_sim_mat(sim_mat, cast_ob = NULL, aff_thres = best_clust$aff_thres[1], sort_among_clust = FALSE, sort_within_clust = FALSE)
+plot_grid(p1, p2,  labels = c("A", "B"))
+#+end_src
+
+
+#+begin_src R  :exports both :results graphics file :file-ext png
+clust_ind <- castcluster::cast_obj_to_df(best_clust$cast_ob[[1]])
+
+plot_data <- cbind(clust_ind, points)
+pl_cast_clean <- ggplot(plot_data, aes(x=x,y=y, x0=x, y0=y, a=sd_x, b=sd_y, angle = 0, colour = as.factor(clust))) +
+  geom_point() +
+  geom_ellipse() +
+  scale_colour_manual(values = rainbow(max(clust_ind$clust)))+
+  coord_fixed()
+pl_cast_clean
+pl_sim_mat_cast <- gg_sim_mat(sim_mat = sim_mat, cast_ob =best_clust$cast_ob[[1]], highlight=TRUE, aff_thres = 0.8, sort_within_clust=TRUE, sort_among_clust=TRUE)
+
+#+end_src
+
+
+
+#+begin_src R  :exports both :results graphics file :file-ext png
+point_cloud <- lapply(seq_along(plot_data$x),
+                      function(i, plot_data){
+                        out <- data.frame(
+                            mvrnorm(1000, as_vector(plot_data[i,c("x","y")]),
+                                    diag(as_vector(plot_data[i,c("sd_x", "sd_y")])^2)),
+                          clust = plot_data[i,c("clust")]
+                        )
+                        return(out)
+                        }, plot_data = plot_data)
+point_cloud <- do.call(rbind, point_cloud)
+
+pl_cast<-ggplot(plot_data, aes(x=x,y=y, x0=x, y0=y, a=sd_x, b=sd_y, angle = 0, colour = as.factor(clust))) +
+  geom_point() +
+  geom_ellipse() +
+  geom_point(data = point_cloud, mapping = aes(x=x, y=y, fill = as.factor(clust), colour = as.factor(clust)), alpha = 0.05,  shape = 16,inherit.aes=FALSE) +
+  scale_colour_manual(values = rainbow(max(clust_ind$clust)))+
+  coord_fixed()
+
+pl_cast
+#+end_src
+
+
+To finish off, i show the perfomance against Heirarchical clustering and Affinity propagation, two techniiquse that might also be suitable for bioregionalisations.
+
+R hclust uses distances. Since we generated the similarity matrix using the Bhattarcharyya distance transfomed, we will reverse the transormation to get the relevand distance matrix.
+
+How the techniques scale as the data grows is important too, so I will test the speed of the algorithms as the nubmer of points grows.
+
+Note that calculating the similarity matrix has some expensive steps. The number of site pairs grows by n^2, and calculating the Bhattacharyya distance requires inverting the covariance matrix which grows by at least p^3, where p is the number of predictors/dimensions.
+
+#+begin_src R  :exports both :results graphics file :file-ext png
+
+make_sim_mat_list <- function(n_points) {
+    points <- data.frame(
+    x = runif(n_points, -1,1),
+    y = runif(n_points, -1,1),
+    sd_x = rbeta(n_points, 1.5, 3)/7, #beta distributions are always positive, but the parameters are not easy to interpret
+    sd_y = rbeta(n_points, 1.5, 3)/7
+    )
+
+    point_sigma <- list()
+    point_sigma$sigma <- lapply(seq_along(points[,1]),
+                        function(i, points) {
+                            return(diag(points[i, c("sd_x", "sd_y")] ))
+                        }, points=points)
+    point_sigma$sigma_det <- lapply(point_sigma$sigma,
+                        function(sig) {
+                                return(determinant(sig, logarithm=FALSE)$modulus)
+                                        })
+    sim_mat <- make_sim_mat(points[c("x","y")], point_sigma)
+    return(sim_mat)
+}
+
+n_sizes <- floor(10^(seq(2, 3.5, 0.5)))
+sim_mat_list <- lapply(n_sizes, make_sim_mat_list)
+dist_mat_list <- lapply(sim_mat_list, \(sim_mat)dist(-log(sim_mat)))
+
+sim_mat_id <- seq_along(sim_mat_list)
+technique_names <- c("cast", "apcluster", "hclust")
+
+test_combinations <- tidyr::expand_grid(sim_mat_id, technique_names)
+
+source("./hclust_hubert_gamma.R")
+
+clustering_times <- purrr::pmap_dfr(test_combinations,  function(sim_mat_id, technique_names, n_s=n_sizes, s_m_l=sim_mat_list, d_m_l = dist_mat_list){
+  #pass in n_sizes, sim_mat_list
+  timing <- switch(technique_names,
+         cast = bench::mark({
+           cast_optimal(s_m_l[[sim_mat_id]])
+           }, check = FALSE),
+         apcluster = bench::mark({
+           apcluster(s_m_l[[sim_mat_id]])
+           }, check = FALSE),
+         hclust = bench::mark({
+           hclust_hubert_gamma(d_m_l[[sim_mat_id]], method = "ward.D2", max_k = 50, sim_mat = s_m_l[[sim_mat_id]])
+           }, check = FALSE))
+  return(data.frame(timing, n = n_s[sim_mat_id], technique = technique_names))
+  })
+
+
+#hc <- hclust(dist_mat_list[[1]], method = "complete")
+#plot(hc)
+
+#chc<- cutree(hc, k= seq(1,50))
+
+
+clustering_time_trim <- clustering_times[, c("n","median","technique","mem_alloc")]
+#clustering_times_df <- do.call( rbind, clustering_times)
+pl_times<-ggplot(clustering_time_trim, aes(x=n, y = median, grouping = technique, color = as.factor(technique))) +
+                         geom_line() +
+  geom_point()+  scale_colour_manual(values = c("red", "green", "blue"))
+pl_times
+
+pl_mem<-ggplot(clustering_time_trim, aes(x=n, y = mem_alloc, grouping = technique, color = as.factor(technique))) +
+                         geom_line() +
+  geom_point()+  scale_colour_manual(values = c("red", "green", "blue"))
+pl_mem
+plot_grid(pl_times, pl_mem, labels = c("Run Time", "Memory"))
+
+
+
+
+
+#Huberts gamma is lower than for CAST
+test_k = seq(2,50)
+apc_gamma <- purrr::map_dfr(seq_along(test_k), function(k, t_k = test_k, s_m = sim_mat) {
+  apc <- apclusterK(s = s_m, K = t_k[k], prc = 0)
+  mem_mat <- castcluster::membership_mat(apc@clusters)
+  return(data.frame(gamma=castcluster::hubert_gamma(s_m,  mem_mat ), k= length(apc@clusters) ))
+})
+#sim_mat gave a peak hubert gamma of 0.6106416 with k=8
+#log(sim_mat) was much worse, peak gamma 0.4236805 with k=4
+#log(sim_mat)+1 was the same as log(sim_mat)
+#best cast run had gamma = 0.6411068 and k=7
+apc <-  apcluster(s = sim_mat)
+plot(apc, points[,c("x","y")])
+pl_ap<-recordPlot()
+apc <-  apclusterK(s = sim_mat, K = apc_gamma$k[which.max(apc_gamma$gamma)])
+plot(apc, points[,c("x","y")])
+pl_ap_native<-recordPlot()
+ap_clust_ind <- castcluster::cast_obj_to_df(apc@clusters)
+plot_data <- cbind(ap_clust_ind, points)
+pl_ap<- ggplot(plot_data, aes(x=x,y=y, x0=x, y0=y, a=sd_x, b=sd_y, angle = 0, colour = as.factor(clust))) +
+  geom_point() +
+  geom_ellipse() +
+  scale_colour_manual(values = rainbow(length(apc@clusters)))+
+  coord_fixed()
+
+ggplot(apc_gamma, aes(x=k, y=gamma))+geom_line()+geom_point() +
+  geom_hline(yintercept = best_clust$gamma)
+
+dist_mat <- dist(-log(sim_mat))
+hc <- hclust(dist_mat, method = "ward.D2")
+  #cut at 1 to max_k sites
+test_k = seq(2,50)
+ctc <- cutree(hc, test_k)
+gamma <- vapply(seq_along(test_k), function(k, ct = ctc, s_m = sim_mat) {
+  mem_mat <- make_mem_mat(ct[,k])
+  return(castcluster::hubert_gamma(s_m,  mem_mat ))
+}, numeric(1))
+best_k <- which.max(gamma)
+plot_data <- data.frame(points, clust = ctc[,best_k])
+pl_hclust<-ggplot(plot_data, aes(x=x,y=y, x0=x, y0=y, a=sd_x, b=sd_y, angle = 0, colour = as.factor(clust))) +
+  geom_point() +
+  geom_ellipse() +
+  scale_colour_manual(values = rainbow(test_k[best_k]))+
+  coord_fixed()
+pl_hclust
+
+plot_grid(pl_ap, pl_ap_native,pl_hclust, pl_cast_clean, labels = c("apcluster", "apcluster native", "Hclust", "castclusters"))
+#+end_src
+
+
+A few curve balls came up here. ++Have to set up the plots to tell the story properly++.
+
+First, castclust is slow. An order of magnitude slower than hclust, and TWO orders of magnitude slower than apcluster. Memory is similar, but only one order of magnitude between the worst (castcluster) and the best (apcluster). I am not in a position to further optimise castcluster though.
+
+Second, castcluster finds better clusterings according to the Hubert Gamma statistic. Hclust is terrible, apcluster is close, but not as good.
+
+A decision:
+
+1. Use Apcluster
+   - faster and more memory efficient (2 and 1 order of magnitude better respectively)
+   - maintained by others
+   - Referenced in python ML scikit (more popular?)
+2. Use CASTer
+   - better hubert gamma clustering, I like it better
+   - low hanging fruit for optimisation by swithcing to sparse matrix, and avoiding hitting virtual memory
+   - runtime is ~11 hours for 3300 points. Can I afford to run for a week per clustering? No
+   -
+
+*** Testing tuning of apcluster
+:PROPERTIES:
+:ID:       org:de9e4cf3-73a1-4b9e-ae08-3fb7b8bf4b55
+:END:
+
+AP cluster is much faster, but the results are worse. Can I tune it to be better?
+
+Semi-manual sweep of the parameter /p/:
+
+#+begin_src
+sim_mat
+  apc <- apclusterK(s = s_m, K = t_k[k], prc = 0)
+
+
+
+
+#+end_src
+
+
+* Resources
+:PROPERTIES:
+:ID:       org:5595c718-1115-48f8-8338-c70929195036
+:END:
+https://scikit-learn.org/stable/modules/clustering.html has some great images of 10 different clustering techniques across 6 different styles of datasets, and summarises the parameters needed for each technique.
